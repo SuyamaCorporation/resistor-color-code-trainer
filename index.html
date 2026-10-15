@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resistor Color Code Trainer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-2 text-blue-400">Resistor Color Code Trainer</h1>
+
+  <!-- Mode tabs -->
+  <div class="flex gap-1 mb-4 bg-gray-800 p-1 rounded">
+    <button id="btnRead" onclick="setTab('read')" class="flex-1 py-1.5 rounded text-sm font-medium bg-blue-600">Read Bands</button>
+    <button id="btnLookup" onclick="setTab('lookup')" class="flex-1 py-1.5 rounded text-sm font-medium text-gray-400">Reverse Lookup</button>
+    <button id="btnQuiz" onclick="setTab('quiz')" class="flex-1 py-1.5 rounded text-sm font-medium text-gray-400">Quiz Mode</button>
+  </div>
+
+  <div class="bg-gray-800 rounded p-4 mb-4">
+    <div class="flex gap-2 mb-4 justify-center">
+      <button id="btn4" onclick="setBands(4)" class="px-3 py-1 rounded text-sm bg-blue-600">4-Band</button>
+      <button id="btn5" onclick="setBands(5)" class="px-3 py-1 rounded text-sm bg-gray-600">5-Band</button>
+    </div>
+    <canvas id="resistorCanvas" width="400" height="100" class="w-full" aria-label="Resistor color band diagram"></canvas>
+  </div>
+
+  <!-- Read mode -->
+  <div id="tabRead">
+    <div class="grid grid-cols-4 gap-2 mb-4" id="bandSelectors"></div>
+    <div id="readResult" class="bg-gray-800 rounded p-4 text-center"></div>
+  </div>
+
+  <!-- Lookup mode -->
+  <div id="tabLookup" class="hidden">
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div>
+        <label for="lookupVal" class="block text-xs text-gray-400 mb-1">Resistance (Ω)</label>
+        <input type="number" id="lookupVal" value="4700" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm" aria-label="Resistance value">
+      </div>
+      <div>
+        <label for="lookupTol" class="block text-xs text-gray-400 mb-1">Tolerance</label>
+        <select id="lookupTol" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm" aria-label="Tolerance">
+          <option value="gold">±5% (Gold)</option>
+          <option value="silver">±10% (Silver)</option>
+          <option value="brown">±1% (Brown)</option>
+          <option value="red">±2% (Red)</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="doLookup()" class="w-full bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded mb-3">Find Color Bands</button>
+    <div id="lookupResult" class="bg-gray-800 rounded p-4"></div>
+  </div>
+
+  <!-- Quiz mode -->
+  <div id="tabQuiz" class="hidden">
+    <div id="quizArea"></div>
+  </div>
+
+  <div class="bg-gray-800 rounded p-3 mt-4">
+    <h2 class="text-xs font-semibold text-purple-400 mb-2">Color Code Reference</h2>
+    <div class="grid grid-cols-5 gap-1" id="reference"></div>
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  black:  { digit: 0, mult: 1,       tol: null,  hex: '#1f2937', text: 'white' },
+  brown:  { digit: 1, mult: 10,      tol: '±1%', hex: '#92400e', text: 'white' },
+  red:    { digit: 2, mult: 100,     tol: '±2%', hex: '#dc2626', text: 'white' },
+  orange: { digit: 3, mult: 1000,    tol: null,  hex: '#f97316', text: 'white' },
+  yellow: { digit: 4, mult: 10000,   tol: null,  hex: '#eab308', text: 'black' },
+  green:  { digit: 5, mult: 100000,  tol: '±0.5%', hex: '#16a34a', text: 'white' },
+  blue:   { digit: 6, mult: 1000000, tol: '±0.25%', hex: '#2563eb', text: 'white' },
+  violet: { digit: 7, mult: 10000000, tol: '±0.1%', hex: '#7c3aed', text: 'white' },
+  gray:   { digit: 8, mult: 100000000, tol: '±0.05%', hex: '#6b7280', text: 'white' },
+  white:  { digit: 9, mult: 1000000000, tol: null, hex: '#f9fafb', text: 'black' },
+  gold:   { digit: null, mult: 0.1,  tol: '±5%', hex: '#d4af37', text: 'black' },
+  silver: { digit: null, mult: 0.01, tol: '±10%', hex: '#c0c0c0', text: 'black' },
+};
+const COLOR_NAMES = Object.keys(COLORS);
+const DIGIT_COLORS = COLOR_NAMES.filter(c => COLORS[c].digit !== null);
+const MULT_COLORS = COLOR_NAMES.filter(c => COLORS[c].mult !== null);
+const TOL_COLORS = COLOR_NAMES.filter(c => COLORS[c].tol !== null);
+
+let bandCount = 4;
+let currentTab = 'read';
+let quizScore = 0, quizTotal = 0, quizBands = [];
+
+function setTab(tab) {
+  currentTab = tab;
+  ['read','lookup','quiz'].forEach(t => {
+    document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('hidden', t !== tab);
+    document.getElementById('btn' + t.charAt(0).toUpperCase() + t.slice(1)).className =
+      'flex-1 py-1.5 rounded text-sm font-medium ' + (t === tab ? 'bg-blue-600' : 'text-gray-400');
+  });
+  if (tab === 'quiz') newQuiz();
+}
+
+function setBands(n) {
+  bandCount = n;
+  document.getElementById('btn4').className = 'px-3 py-1 rounded text-sm ' + (n===4 ? 'bg-blue-600' : 'bg-gray-600');
+  document.getElementById('btn5').className = 'px-3 py-1 rounded text-sm ' + (n===5 ? 'bg-blue-600' : 'bg-gray-600');
+  if (currentTab === 'read') buildBandSelectors();
+  calcResistance();
+}
+
+function buildBandSelectors() {
+  const div = document.getElementById('bandSelectors');
+  div.innerHTML = '';
+  div.className = `grid grid-cols-${bandCount} gap-2 mb-4`;
+  const bandLabels = bandCount === 4
+    ? ['Band 1 (10s)', 'Band 2 (1s)', 'Multiplier', 'Tolerance']
+    : ['Band 1', 'Band 2', 'Band 3', 'Multiplier', 'Tolerance'];
+
+  for (let i = 0; i < bandCount; i++) {
+    const validColors = i < bandCount - 2 ? DIGIT_COLORS : i === bandCount - 2 ? MULT_COLORS : TOL_COLORS;
+    const label = document.createElement('label');
+    label.className = 'block';
+    label.innerHTML = `<span class="text-xs text-gray-400 block mb-1">${bandLabels[i]}</span>`;
+    const sel = document.createElement('select');
+    sel.id = 'band' + i;
+    sel.className = 'w-full rounded px-2 py-1 text-sm font-medium';
+    sel.setAttribute('aria-label', bandLabels[i]);
+    validColors.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = c.charAt(0).toUpperCase() + c.slice(1);
+      opt.style.background = COLORS[c].hex;
+      opt.style.color = COLORS[c].text;
+      sel.appendChild(opt);
+    });
+    // Set defaults
+    const defaults4 = ['yellow','violet','red','gold'];
+    const defaults5 = ['red','red','black','red','brown'];
+    sel.value = bandCount === 4 ? defaults4[i] : defaults5[i];
+    sel.style.background = COLORS[sel.value].hex;
+    sel.style.color = COLORS[sel.value].text;
+    sel.onchange = () => { sel.style.background = COLORS[sel.value].hex; sel.style.color = COLORS[sel.value].text; calcResistance(); };
+    label.appendChild(sel);
+    div.appendChild(label);
+  }
+}
+
+function getSelectedBands() {
+  const bands = [];
+  for (let i = 0; i < bandCount; i++) {
+    const sel = document.getElementById('band' + i);
+    if (sel) bands.push(sel.value);
+  }
+  return bands;
+}
+
+function calcResistanceFromBands(bands, n) {
+  let digits = 0;
+  for (let i = 0; i < n - 2; i++) {
+    digits = digits * 10 + COLORS[bands[i]].digit;
+  }
+  const mult = COLORS[bands[n-2]].mult;
+  const tol = COLORS[bands[n-1]].tol;
+  const value = digits * mult;
+  return { value, tol };
+}
+
+function formatOhm(val) {
+  if (val >= 1e9) return (val/1e9).toFixed(2) + ' GΩ';
+  if (val >= 1e6) return (val/1e6).toFixed(2) + ' MΩ';
+  if (val >= 1e3) return (val/1e3).toFixed(2) + ' kΩ';
+  return val.toFixed(2) + ' Ω';
+}
+
+function calcResistance() {
+  const bands = getSelectedBands();
+  if (bands.length < bandCount) return;
+  const { value, tol } = calcResistanceFromBands(bands, bandCount);
+  drawResistor(bands);
+  document.getElementById('readResult').innerHTML = `
+    <div class="text-2xl font-bold text-blue-300 mb-1">${formatOhm(value)}</div>
+    <div class="text-gray-400">Tolerance: <span class="text-yellow-300">${tol || 'N/A'}</span></div>
+    <div class="text-xs text-gray-500 mt-1">${value} Ω</div>
+  `;
+}
+
+function drawResistor(bands) {
+  const canvas = document.getElementById('resistorCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Body
+  ctx.fillStyle = '#c8b891';
+  ctx.beginPath();
+  ctx.roundRect(80, 25, 240, 50, 8);
+  ctx.fill();
+
+  // Leads
+  ctx.strokeStyle = '#c0c0c0';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(80, H/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(320, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+
+  // Bands
+  const bw = 20, gap = (240 - bands.length * bw) / (bands.length + 1);
+  bands.forEach((band, i) => {
+    const x = 80 + gap + i * (bw + gap);
+    ctx.fillStyle = COLORS[band].hex;
+    ctx.fillRect(x, 25, bw, 50);
+    // Border
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, 25, bw, 50);
+  });
+}
+
+function doLookup() {
+  const val = parseFloat(document.getElementById('lookupVal').value);
+  const tol = document.getElementById('lookupTol').value;
+  if (isNaN(val) || val <= 0) return;
+
+  // Find best 4-band representation
+  let best = null;
+  for (const c1 of DIGIT_COLORS) {
+    for (const c2 of DIGIT_COLORS) {
+      for (const cm of MULT_COLORS) {
+        const v = (COLORS[c1].digit * 10 + COLORS[c2].digit) * COLORS[cm].mult;
+        if (Math.abs(v - val) < 0.01 || Math.abs(v - val) / val < 0.001) {
+          best = [c1, c2, cm, tol];
+          break;
+        }
+      }
+      if (best) break;
+    }
+    if (best) break;
+  }
+
+  if (best) {
+    drawResistor(best);
+    document.getElementById('lookupResult').innerHTML = `
+      <div class="text-sm text-gray-300 mb-2">4-Band: ${best.map(b => `<span style="color:${COLORS[b].hex};background:#374151;padding:1px 4px;border-radius:3px">${b}</span>`).join(' ')}</div>
+      <div class="text-xs text-gray-500">Value: ${formatOhm(val)} ${COLORS[tol].tol}</div>
+    `;
+  } else {
+    document.getElementById('lookupResult').textContent = 'Cannot represent exactly with standard color codes.';
+  }
+}
+
+function newQuiz() {
+  const n = Math.random() > 0.5 ? 4 : 5;
+  const bands = [];
+  for (let i = 0; i < n - 2; i++) bands.push(DIGIT_COLORS[Math.floor(Math.random()*DIGIT_COLORS.length)]);
+  bands.push(MULT_COLORS[Math.floor(Math.random()*8)]);
+  bands.push(TOL_COLORS[Math.floor(Math.random()*TOL_COLORS.length)]);
+  quizBands = bands;
+  const { value, tol } = calcResistanceFromBands(bands, n);
+  drawResistor(bands);
+
+  const choices = [formatOhm(value)];
+  while (choices.length < 4) {
+    const fakeMult = MULT_COLORS[Math.floor(Math.random()*8)];
+    const fakeBands = [...bands.slice(0, n-2), fakeMult, bands[n-1]];
+    const fv = calcResistanceFromBands(fakeBands, n).value;
+    const fmt = formatOhm(fv);
+    if (!choices.includes(fmt)) choices.push(fmt);
+  }
+  choices.sort(() => Math.random() - 0.5);
+
+  document.getElementById('quizArea').innerHTML = `
+    <div class="text-sm text-gray-400 mb-3 text-center">Score: ${quizScore}/${quizTotal}</div>
+    <div class="text-sm font-semibold text-gray-300 mb-3 text-center">What is the resistance of this resistor?</div>
+    <div class="grid grid-cols-2 gap-2 mb-3">
+      ${choices.map(c => `<button onclick="checkQuiz('${c}','${formatOhm(value)}')" class="bg-gray-700 hover:bg-blue-700 border border-gray-600 px-3 py-2 rounded text-sm" aria-label="Answer ${c}">${c}</button>`).join('')}
+    </div>
+    <div id="quizFeedback" class="text-center min-h-8"></div>
+  `;
+}
+
+function checkQuiz(answer, correct) {
+  quizTotal++;
+  const ok = answer === correct;
+  if (ok) quizScore++;
+  document.getElementById('quizFeedback').innerHTML = ok
+    ? '<span class="text-green-400 font-bold">✓ Correct!</span>'
+    : `<span class="text-red-400 font-bold">✗ Wrong. Answer: ${correct}</span>`;
+  document.querySelectorAll('#quizArea button').forEach(b => {
+    b.disabled = true;
+    if (b.textContent === correct) b.className = 'bg-green-800 border border-green-500 px-3 py-2 rounded text-sm';
+    else if (b.textContent === answer && !ok) b.className = 'bg-red-900 border border-red-500 px-3 py-2 rounded text-sm';
+    else b.className = 'bg-gray-800 border border-gray-700 px-3 py-2 rounded text-sm opacity-50';
+  });
+  setTimeout(newQuiz, 1800);
+}
+
+// Reference table
+const ref = document.getElementById('reference');
+COLOR_NAMES.forEach(c => {
+  const d = COLORS[c];
+  const div = document.createElement('div');
+  div.style.cssText = `background:${d.hex};color:${d.text};padding:3px 4px;border-radius:3px;font-size:10px;text-align:center`;
+  div.textContent = c.slice(0,3) + (d.digit !== null ? ' ' + d.digit : '');
+  div.title = `${c}: digit=${d.digit ?? '-'}, mult=${d.mult}, tol=${d.tol ?? '-'}`;
+  ref.appendChild(div);
+});
+
+buildBandSelectors();
+calcResistance();
+</script>
+</body>
+</html>
